@@ -1,0 +1,152 @@
+#!/bin/bash
+
+#===============================================================================
+# Log Archive Tool
+# Description: Archive et compresse les logs avec timestamp
+# Usage: ./log-archive <log-directory>
+#===============================================================================
+
+# Configuration
+ARCHIVE_DIR="/var/log/archives"
+LOG_FILE="/var/log/archive.log"
+DATE_FORMAT=$(date +%Y%m%d_%H%M%S)
+HOSTNAME=$(hostname)
+
+# Couleurs pour l'affichage
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+#-------------------------------------------------------------------------------
+# Fonctions
+#-------------------------------------------------------------------------------
+
+log_message() {
+    local level=$1
+    local message=$2
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${timestamp} [${level}] ${message}" | tee -a "$LOG_FILE"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+show_help() {
+    echo "Usage: $0 <log-directory>"
+    echo ""
+    echo "Exemples:"
+    echo "  $0 /var/log                    # Archiver /var/log"
+    echo "  $0 /var/log/nginx              # Archiver logs nginx"
+    echo "  $0 /var/log/mysql              # Archiver logs mysql"
+    echo ""
+    echo "L'archive sera créée dans: $ARCHIVE_DIR"
+    echo "Format: logs_archive_YYYYMMDD_HHMMSS.tar.gz"
+}
+
+#-------------------------------------------------------------------------------
+# Vérifications initiales
+#-------------------------------------------------------------------------------
+
+# Vérifier si argument fourni
+if [ $# -eq 0 ] || [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
+    show_help
+    exit 0
+fi
+
+LOG_DIR=$1
+
+# Vérifier si le répertoire existe
+if [ ! -d "$LOG_DIR" ]; then
+    print_error "Le répertoire '$LOG_DIR' n'existe pas!"
+    exit 1
+fi
+
+# Vérifier les permissions de lecture
+if [ ! -r "$LOG_DIR" ]; then
+    print_error "Permission refusée: impossible de lire '$LOG_DIR'"
+    print_error "Essayez avec sudo: sudo $0 $LOG_DIR"
+    exit 1
+fi
+
+# Créer le répertoire d'archives s'il n'existe pas
+if [ ! -d "$ARCHIVE_DIR" ]; then
+    print_warning "Création du répertoire d'archives: $ARCHIVE_DIR"
+    sudo mkdir -p "$ARCHIVE_DIR" 2>/dev/null || mkdir -p "$ARCHIVE_DIR"
+    if [ $? -ne 0 ]; then
+        print_error "Impossible de créer $ARCHIVE_DIR"
+        exit 1
+    fi
+fi
+
+#-------------------------------------------------------------------------------
+# Création de l'archive
+#-------------------------------------------------------------------------------
+
+# Nom de l'archive avec timestamp
+ARCHIVE_NAME="logs_archive_${DATE_FORMAT}.tar.gz"
+ARCHIVE_PATH="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
+
+print_warning "Démarrage de l'archivage..."
+print_warning "Source: $LOG_DIR"
+print_warning "Destination: $ARCHIVE_PATH"
+
+# Compter les fichiers à archiver
+FILE_COUNT=$(find "$LOG_DIR" -type f 2>/dev/null | wc -l)
+print_warning "Nombre de fichiers trouvés: $FILE_COUNT"
+
+if [ $FILE_COUNT -eq 0 ]; then
+    print_error "Aucun fichier à archiver dans $LOG_DIR"
+    exit 1
+fi
+
+# Créer l'archive (exclure les fichiers ouverts et les archives existantes)
+echo "Compression en cours..."
+
+tar -czf "$ARCHIVE_PATH" \
+    --exclude='*.gz' \
+    --exclude='*.tar.gz' \
+    --exclude='*.zip' \
+    -C "$(dirname "$LOG_DIR")" \
+    "$(basename "$LOG_DIR")" 2>/dev/null
+
+# Vérifier le résultat
+if [ $? -eq 0 ]; then
+    # Calculer la taille
+    ARCHIVE_SIZE=$(du -h "$ARCHIVE_PATH" | cut -f1)
+    SOURCE_SIZE=$(du -sh "$LOG_DIR" 2>/dev/null | cut -f1)
+    
+    print_success "Archive créée avec succès!"
+    print_success "Fichier: $ARCHIVE_NAME"
+    print_success "Taille source: $SOURCE_SIZE"
+    print_success "Taille archive: $ARCHIVE_SIZE"
+    print_success "Emplacement: $ARCHIVE_PATH"
+    
+    # Logger l'opération
+    log_message "INFO" "Archive créée: $ARCHIVE_NAME | Source: $LOG_DIR | Taille: $ARCHIVE_SIZE | Fichiers: $FILE_COUNT"
+    
+    # Afficher le contenu de l'archive
+    echo ""
+    echo "Contenu de l'archive:"
+    tar -tzf "$ARCHIVE_PATH" | head -10
+    if [ $FILE_COUNT -gt 10 ]; then
+        echo "... et $(($FILE_COUNT - 10)) autres fichiers"
+    fi
+    
+else
+    print_error "Erreur lors de la création de l'archive"
+    log_message "ERROR" "Échec de l'archivage de $LOG_DIR"
+    exit 1
+fi
+
+
+exit 0
